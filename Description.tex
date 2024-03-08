@@ -1,0 +1,109 @@
+\documentclass{article}
+\usepackage{amsmath}
+\usepackage[ruled]{algorithm}
+\usepackage{algpseudocode}
+\newcommand{\mb}[1]{\mathbf{#1}}
+\newcommand{\pfrac}[2]{\frac{\partial #1}{\partial #2}}
+
+\title{A 2D Satellite Example}
+\author{Clark Taylor}
+\date{}
+
+\begin{document}
+\section{Introduction}
+To compare the results of an EKF, a full factor graph, and a sliding window factor graph, we have created a 2D satellite example.  This model is designed to be similar to a satellite tracking problem.  The basic idea is that the Earth is a point in space (0,0) with a bearing-only sensor observing a satellite that is orbiting the Earth.  The state of the satellite involves its position and velocity, while it is also acted on by gravity.  The acceleration due to gravity is represented as:
+\begin{equation}
+    \frac{G_E}{r^2}
+\end{equation}
+where we use the value $G_E=3.986E14\frac{m^3}{s^2}$ and $r$ is the distance from the earth to the satellite.
+
+With this information, we can define the overall system as:
+\begin{equation}
+    \begin{split}
+        \mb{x} &:= [x\ y\ v_x\ v_y]\\
+        \dot{\mb{x}} &= \begin{bmatrix}
+            0&0&1&0 \\ 0&0&0&1\\ 0&0&0&0\\ 0&0&0&0
+        \end{bmatrix}\mb{x} - \frac{G_E}{(x^2+y^2)^\frac{3}{2}}\begin{bmatrix}0\\0\\x\\y\end{bmatrix}+\nu\\
+        z &= \arctan\frac{y}{x}+\eta
+    \end{split}
+\end{equation}
+where $x$, $y$, $v_x$ and $v_y$ are the x and y position  and the x and y velocity of the satellite, respectively.  $z$ is the measurement of the satellites angle from earth, and $\nu$ and $\eta$ are white, zero-mean Gaussian distributions with covariances $\mb{Q}$ and $\mb{R}$, respectively.  Note that the distance of the satellite from the earth (for computing the effect of gravity) can be computed from $x$ and $y$, i.e. $r = \sqrt{x^2+y^2}$.
+
+\section{Computing derivatives:}
+\subsection{Computing $\mb{H}$}
+Starting with:
+\begin{equation}
+    \begin{split}
+        h(\mb{x}) &= \arctan\frac{y}{x}\\
+        \frac{\partial h(\mb{x})}{\partial \mb{x}} &= 
+        \frac{1}{1+\left(\frac{y}{x}\right)^2}
+        \begin{bmatrix}
+            -\frac{y}{x^2}\\\frac{1}{x}\\0\\0
+        \end{bmatrix}\\
+        &= \begin{bmatrix}
+            -\frac{y}{x^2+y^2}\\\frac{x}{x^2+y^2}\\0\\0
+        \end{bmatrix}
+    \end{split}
+\end{equation}
+
+\subsection{Computing $\mb{F}$}
+Starting with:
+\begin{equation}
+    \begin{split}
+        \mb{T} &= \begin{bmatrix}
+            1&0&dt&0\\
+            0&1&0&dt\\
+            0&0&1&0\\
+            0&0&0&1
+        \end{bmatrix}\\
+        \mb{x}_{k+1} &= \mb{T}\mb{x}_k -
+        \frac{G_E}{(x^2+y^2)^\frac{3}{2}}\begin{bmatrix}\frac{x}{2} dt^2\\\frac{y}{2}dt^2\\x dt\\y dt\end{bmatrix}
+    \end{split}
+\end{equation}
+Now, taking the derivative of just the first output of this function w.r.t. $x$ within $\mb{x}$ gives:
+\begin{equation}
+    \begin{split}
+    \frac{\delta x_{k+1}}{\delta x_k} &= 1 -         \frac{G_E dt^2}{2}\left(\frac{1}{(x^2+y^2)^\frac{3}{2}}-\frac{3x^2}{(x^2+y^2)^{\frac{5}{2}}}\right)\\
+    &= 1- \frac{G_E dt^2}{2(x^2+y^2)^\frac{3}{2}}\left(1-\frac{3x^2}{x^2+y^2}\right)\\
+    &= 1- \frac{G_E dt^2}{2(x^2+y^2)^\frac{5}{2}}\left(y^2-2x^2\right)\\
+    \end{split}
+\end{equation}
+Note that the first part of this equation (the 1) comes from the corresponding entry in $\mb{T}$.
+
+Computing w.r.t. $y$
+\begin{equation}
+    \begin{split}
+    \frac{\delta x_{k+1}}{\delta y_k} &= -\frac{G_E dt^2}{2}\left(-\frac{3xy}{(x^2+y^2)^{\frac{5}{2}}}\right)\\
+        &= \frac{3 G_E dt^2 xy}{2(x^2+y^2)^{\frac{5}{2}}}
+    \end{split}
+\end{equation}
+
+Expanding this out, I believe we will get:
+\begin{equation}
+    \frac{\delta \mb{x}_{k+1}}{\delta \mb{x}_k} = \mb{T} + \frac{G_E dt}{(x^2+y^2)^{\frac{5}{2}}}
+    \begin{bmatrix}
+        -\frac{dt (y^2-2x^2)}{2} & \frac{3xy\, dt }{2} & 0 & 0\\
+        \frac{3xy\,dt}{2} & -\frac{dt (x^2-2y^2)}{2} & 0 & 0\\
+        2x^2-y^2 & 3xy & 0 & 0\\
+        3xy & 2y^2-x^2 & 0 & 0
+    \end{bmatrix}
+\end{equation}
+
+\section{Handling ``angular'' innovations}
+As you run your code, you may find that the estimate occasionally just ``goes off'' (my very scientific term for the errors suddenly becoming very large.)  This can happen because $\arctan$ is used for the measurement function, so the actual measurement may be just larger than 0, while the predicted measurement is, in essence, just less than 0, but is computed as something just less than $2\pi$.  After computing the innovation vector, I would suggest adding code implementing the following pseudo-code.
+
+\begin{algorithm}
+    \caption{Accounting for Angle Wrap}
+    \begin{algorithmic}[1]
+        \Procedure{AngleWrap}($\theta$):
+            \If{$\theta>\pi$}
+                \State $\theta \gets \theta-2\pi$
+            \ElsIf{$\theta < -\pi$}
+                \State $\theta \gets \theta+2\pi$
+            \EndIf
+            \State \textbf{return} $\theta$
+        \EndProcedure
+    \end{algorithmic}
+\end{algorithm}
+
+\end{document}

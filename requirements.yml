@@ -1,0 +1,22 @@
+name: factorGraphExample
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.10
+  - matplotlib
+  - numpy
+  - scipy
+  - tqdm
+  # These ones are not required, but I sure like them
+  # (Makes working with VS code and python notebooks easier)
+  - ipython
+  - pylint
+  - ipykernel
+  # These ones are used for the second class if you want to make
+  # Python run faster
+  - snakeviz
+  - numba
+  # If you want to do symbolic derivatives
+  # (useful for the EKF)...
+  - sympy
