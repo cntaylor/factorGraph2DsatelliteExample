@@ -5,6 +5,12 @@ import scipy.linalg as la
 import matplotlib.pyplot as plt
 from math import pi, sqrt, ceil, atan2
 
+
+'''
+To create a sparse matrix, you have to create three "parallel" arrays, 
+one with row indicies, one with column indicies, and one with the actual
+values to put in the matrix.  This is a helper function to make this process easier.
+'''
 def dense_2_sp_lists(M: np.array, tl_row : int, tl_col: int, row_vec=True):
     '''
     This function takes in a dense matrix and turns it into a flat array.
@@ -44,15 +50,27 @@ def dense_2_sp_lists(M: np.array, tl_row : int, tl_col: int, row_vec=True):
 '''
     L's columns will be 3*N big, where N is the number of timesteps
     Rows will be organized organized dynamics first, then measurements:
-
 '''
 class satelliteModelBatch:
+    '''
+    A class to perform the factor graph optimization.  It stores
+    all the measurements in the class, has several "helper" functions, and the
+    "opt" function that does the actual optimization using the helper functions
+    '''
+    
     def __init__(self, meas: np.array, R, Q, 
                 dt: float = 5, 
                 x0:np.array = np.array([0, 2E7, 4500, 0])):
+        '''
+        Get the measurements, dt (for running the dynamics), 
+        the R & Q matrices, and the initial location and initialize
+        the hidden variables
+        '''
         self.N = len(meas)
         # self.N = 10
         self.dt = dt
+        # To do more accurate dynamics, if dt is large, use multiple, smaller
+        # timesteps instead
         if self.dt > 1:
             self.prop_dt = self.dt / ceil(self.dt)
             self.n_timesteps = int(ceil(self.dt))
@@ -77,6 +95,10 @@ class satelliteModelBatch:
             self.states[i] = self.prop_one_timestep(self.states[i-1])
         
     def prop_one_timestep(self, state):
+        '''
+        This runs the actual dynamics, i.e. given a value for x (really x_k) find 
+        what x should be (by dynamics) at the next timestep (self.dt forward in time) -- x_{k+1}
+        '''
         going_out = state.copy()
         for _ in range(self.n_timesteps):
             dist = la.norm(going_out[:2])
@@ -89,7 +111,9 @@ class satelliteModelBatch:
         return going_out
 
 
-
+    '''
+    Helper functions to tell what rows you are indexing into in the 'L' matrix
+    '''
     def state_idx(self, i: int) -> int:
         return 4*i
 
@@ -123,9 +147,9 @@ class satelliteModelBatch:
         Takes in a current state and finds the derivative of the
         propagate forward one step function (prop_one_timestep)
         
-        Inputs: state -- a 3-vector (np.array)
+        Inputs: state -- a 4-vector (np.array)
         
-        Returns a 3x3 np.array
+        Returns a 4x4 np.array
         '''
         F = np.eye(4)
         curr_state = state.copy()
@@ -151,6 +175,12 @@ class satelliteModelBatch:
         return F
 
     def create_L(self):
+        '''
+        This creates the big matrix (L) given the current state of the whole system
+        '''
+        # First, determine how many non zero entries (nnz_entries) will be in the
+        # sparse matrix. Then create the 3 parallel arrays that will be used to
+        # form this matrix
         H_size = 4
         F_size=16 # Should be state size**2
         nnz_entries = 2*F_size*(self.N-1) + H_size*self.N
@@ -180,6 +210,11 @@ class satelliteModelBatch:
         return sp.csr_matrix((data_l,(row_l,col_l)))
 
     def create_y(self, state_vec=None):
+        '''
+        Compute the residual vector.  Can compute it for the
+        current state (pass in "None") or for a new state that you 
+        want to test without setting the internal state.
+        '''
         if state_vec is not None:
             state_data = self.vec_to_data(state_vec)
         else:
@@ -211,7 +246,7 @@ class satelliteModelBatch:
         This takes the current state and adds on delta_x.
         It DOES NOT  modify any internal state
 
-        Inputs: delta_x, a self.N X 3 vector (np.array)
+        Inputs: delta_x, a self.N X 3 vector (np.array)h
         Returns: a full state vector of the same size
         '''
         going_out = np.zeros(self.N*4)
@@ -238,7 +273,7 @@ class satelliteModelBatch:
         Create the Jacobian matrix (L) and the residual vector (y) for
         the current state.  Find the best linear approximation to minimize y
         and move in that direction.  Repeat until convergence. 
-        (This is a Gauss-Newton optimization procedure)
+        (This is a damped Gauss-Newton optimization procedure)
         '''
         finished=False
         num_iters=0
@@ -257,6 +292,7 @@ class satelliteModelBatch:
             Lty = L.T.dot(y)
             delta_x = spla.spsolve(M,Lty)
             scale = 1
+            # Damp the Gauss-Newton step if it doesn't do what the linearization predicts
             scale_good = False
             while not scale_good:
                 next_y = self.create_y(self.add_delta(delta_x*scale))
@@ -274,8 +310,13 @@ class satelliteModelBatch:
             self.update_state(delta_x*scale)
             print('iteration',num_iters,'delta_x length was',la.norm(delta_x*scale), 'scale was',scale)
             finished = la.norm(delta_x)<12 or num_iters > 100
-        
+
+
 def test_Jacobian(batch_uni, col, dx = .001):
+    '''
+    This function is useful for debugging. If things don't work, try to 
+    figure out where the derivative matrix is wrong.
+    '''
     curr_y = batch_uni.create_y()
     orig_state = batch_uni.add_delta()
     delta_x = np.zeros(orig_state.shape)
