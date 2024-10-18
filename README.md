@@ -1,5 +1,5 @@
 # Purpose
-The purpose of this repository is to complement the paper "Factor Graphs for Navigation Applications: A Tutorial" by Clark Taylor and Jason Gross in the *Navigation* journal.
+The purpose of this repository is to complement the paper "[Factor Graphs for Navigation Applications: A Tutorial](https://navi.ion.org/content/71/3/navi.653)" by Clark Taylor and Jason Gross in the *Navigation* journal.
 
 # Important files
 ## System Description
