@@ -159,7 +159,7 @@ class satelliteModelBatch:
             dist = la.norm(curr_state[:2])
             k = self.prop_dt*self.GE/(dist**5)
 
-            t_mat = np.array([[-self.prop_dt*(y**2-2*x**2)/2, 3*x*y*self.prop_dt, 0, 0],
+            t_mat = np.array([[-self.prop_dt*(y**2-2*x**2)/2, 3*x*y*self.prop_dt/2.0, 0, 0],
                               [3*x*y*self.prop_dt/2.0, -self.prop_dt*(x**2-2*y**2)/2, 0, 0],
                               [2*x**2-y**2, 3*x*y, 0, 0],
                               [3*x*y, 2*y**2-x**2, 0, 0]])
@@ -293,7 +293,7 @@ class satelliteModelBatch:
             delta_x = spla.spsolve(M,Lty)
             scale = 1
             # Damp the Gauss-Newton step if it doesn't do what the linearization predicts
-            scale_good = False
+            scale_good = la.norm(delta_x) < 10 # if the first step is too small, just do it and don't even check
             while not scale_good:
                 next_y = self.create_y(self.add_delta(delta_x*scale))
                 pred_y = y-L.dot(delta_x*scale)
@@ -350,7 +350,7 @@ if __name__ == '__main__':
     opt_class.opt()
     plt.plot(opt_class.states[:,0],opt_class.states[:,1],'b',label='opt')
     plt.legend()
-    plt.savefig(f'{prefix}_res.png')
+    plt.savefig(f'{prefix}_res_new.png')
     
     plt.figure()
     plt.plot(opt_class.states[:,0],opt_class.states[:,1],c='b', label='estimate')
@@ -358,7 +358,7 @@ if __name__ == '__main__':
     plt.legend()
     ax=plt.gca()
     ax.set_aspect('equal')
-    plt.savefig('FG_'+prefix+'.png')
+    plt.savefig('FG_'+prefix+'_new.png')
     plt.show()
 
 
@@ -366,10 +366,10 @@ if __name__ == '__main__':
     plt.plot(opt_class.states-truth)
     plt.legend (['x','y','vx','vy'])
     plt.title('errors')
-    plt.savefig(f'{prefix}_errors.png')
+    plt.savefig(f'{prefix}_errors_new.png')
     plt.show()
 
-    np.savez('fg_'+prefix+'_res',fg_res=opt_class.states, truth=truth)
+    np.savez('fg_'+prefix+'_res_new',fg_res=opt_class.states, truth=truth)
 
 
 
