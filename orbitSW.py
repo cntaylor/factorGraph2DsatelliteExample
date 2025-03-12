@@ -114,6 +114,7 @@ class satelliteSlidingWindow:
         S_P0_inv = la.inv(la.cholesky(P0))
         self.prior_G = S_P0_inv
         self.prior_xbar = x0
+        self.prior_meas = np.zeros(len(x0))
         self.states = np.zeros((1,4))
         self.states[0] = x0
         self.opt_call_sizes=[]
@@ -188,9 +189,10 @@ class satelliteSlidingWindow:
         y = self.create_y()
         sub_y = y[row_idx]
         rotated_y = Q.T.dot(sub_y)
-        ## 4 & 5.  Eliminate row and column and move remainder into prior_G
+        ## 4 & 5.  Eliminate row and column and move remainder into prior_G (D' in paper, Eq 17)
         self.prior_G = R[4:,4:]
-        self.prior_xbar = self.states[1] + la.pinv(self.prior_G).dot(rotated_y[4:])
+        self.prior_xbar = self.states[1] 
+        self.prior_meas = rotated_y[4:]
 
         # Shorten the arrays
         self.meas = self.meas[1:]
@@ -299,7 +301,7 @@ class satelliteSlidingWindow:
                 tmp += 2*pi
             y[self.meas_idx(i):self.meas_idx(i+1)] = self.S_R_inv * tmp
         # Now do the prior
-        y[self.prior_idx():self.prior_idx()+4] = self.prior_G.dot(self.prior_xbar - state_data[0])
+        y[self.prior_idx():self.prior_idx()+4] = self.prior_meas - self.prior_G.dot(state_data[0]-self.prior_xbar)
         return y
 
     def vec_to_data(self,vec):
@@ -439,7 +441,7 @@ def ANEES():
     pass
 
 if __name__ == '__main__':
-    prefix = 'slide_example2'
+    prefix = 'slide_example'
     data = np.load(f'{prefix}.npz')
     meas = data['meas']
     truth = data['truth']
@@ -452,11 +454,7 @@ if __name__ == '__main__':
     
     data_len = len(meas)
     
-    window_size= 2 #data_len #int(data_len/200)*100
-    # Can either store the oldest things (most optimized)
-    # or always store the most recent
-    # True = the oldest ones
-    store_most_opt = False
+    window_size= 10 #data_len #int(data_len/200)*100
 
     #max iterations each timestep
     max_iters=1
@@ -477,16 +475,16 @@ if __name__ == '__main__':
             opt_states[i-window_size+1] = opt_class.states[0]
         rt_states[i]=opt_class.states[-1]
     opt_states[-window_size:]= opt_class.states
-    # rt_states[-window_size:]= opt_class.states
     
-    print ('RMSEs',RMSEs(opt_states,truth))
+    print ('best-case RMSEs',RMSEs(opt_states,truth))
+    print ('real-time RMSES',RMSEs(rt_states, truth))
     errors = opt_states-truth[:len(opt_states)]
 
     plt.plot(opt_states[:,0],opt_states[:,1],'m',label='opt_final')
 
 
     plt.legend()
-    # plt.savefig(f'{prefix}_SW_{window_size}_res.png')
+    plt.savefig(f'{prefix}_SW_{window_size}_res.png')
     
     fig,axs= plt.subplots(2,1)
     axs[0].set_title('position error')
@@ -498,7 +496,7 @@ if __name__ == '__main__':
     axs[1].plot(errors[:,3],label='y')
     
     plt.figure()
-    ekf_res = np.load('ekf_res.npy')
+    ekf_res = np.load(f'ekf_{prefix}_res.npz')['ekf_res']
     plt.plot(ekf_res[:,0], ekf_res[:,1], c='c', label='EKF')
     plt.plot(opt_states[:,0],opt_states[:,1],c='b', label=f'delay={window_size}')
     plt.plot(rt_states[:,0], rt_states[:,1], 'g', label='real-time')
@@ -529,46 +527,4 @@ if __name__ == '__main__':
 
     np.savez(f'timing_res_{window_size}.npz', call_sizes=opt_class.opt_call_sizes, full_opt = opt_class.opt_call_times,
              solve_L_times = opt_class.solve_L_times, create_and_solve_L = opt_class.solve_and_form_L_times)
-    plt.figure()
-    plt.plot(opt_class.opt_call_sizes,opt_class.opt_call_times,'*')
-    plt.title('Time vs size, full optimization')
-    plt.savefig(f'Opt_timing_{window_size}.png')
-    
-    plt.figure()
-    plt.plot(opt_class.opt_call_sizes,opt_class.solve_L_times,'*')
-    plt.title('Time vs size, Solve L')
-    plt.savefig(f'LA_timing_{window_size}.png')
-
-    plt.figure()
-    plt.plot(opt_class.opt_call_sizes,opt_class.solve_and_form_L_times,'*')
-    plt.title('Time vs size, Create and Solve L')
-    plt.savefig(f'LA_create_timing_{window_size}.png')
     plt.show()
-
-
-
-# ######### Test if dense_2_sp_lists is working   ##########
-# # Create a block diagonal matrix, plus two matrices off the diagonal
-# matrix1 = np.array([0,1.,1.,0]).reshape((2,2))
-# big_data_l = np.zeros(7*4)
-# big_row_l = np.zeros(7*4,dtype=int)
-# big_col_l = np.zeros(7*4,dtype=int)
-# # The block diagonal matrices
-# for i in range(5):
-#     big_data_l[i*4:(i+1)*4],big_row_l[i*4:(i+1)*4],big_col_l[i*4:(i+1)*4] = \
-#         dense_2_sp_lists(matrix1,i*2,i*2)
-# # A matrix in the top right
-# i=5
-# matrix2= np.eye(2)
-# big_data_l[i*4:(i+1)*4],big_row_l[i*4:(i+1)*4],big_col_l[i*4:(i+1)*4] = \
-#     dense_2_sp_lists(matrix2,0,8)
-# # A matrix at the bottom left
-# i=6
-# big_data_l[i*4:(i+1)*4],big_row_l[i*4:(i+1)*4],big_col_l[i*4:(i+1)*4] = \
-#     dense_2_sp_lists(matrix2,8,0)
-
-# L = sp.csr_matrix((big_data_l,(big_row_l,big_col_l)))
-
-# plt.spy(L)
-# plt.show()
-
