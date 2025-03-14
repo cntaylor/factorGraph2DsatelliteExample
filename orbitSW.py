@@ -184,7 +184,7 @@ class satelliteSlidingWindow:
         sub_L = L[row_idx,:8]
         ## 3.  Run QR decomposition
         sub_L = sub_L.todense()
-        Q,R = la.qr(sub_L, mode='economic')
+        Q,R = la.qr(sub_L, mode='economic') #QR option specific to _scipy_ linalg
         ## 3a.  Modify y by the same rotation matrix
         y = self.create_y()
         sub_y = y[row_idx]
@@ -434,12 +434,6 @@ def RMSEs(est_states: np.array, true_states: np.array) -> float:
     vel_RMSE = sqrt(np.sum(np.square(true_states[:len(est_states),2:]-est_states[:,2:]))/(len(est_states)*2))
     return (total_RMSE, pos_RMSE, vel_RMSE)
 
-def errors(est_data, truth) -> np.array:
-    return 
-def ANEES():
-    #TODO:  implement this function to be useful
-    pass
-
 if __name__ == '__main__':
     prefix = 'slide_example'
     data = np.load(f'{prefix}.npz')
@@ -454,12 +448,13 @@ if __name__ == '__main__':
     
     data_len = len(meas)
     
-    window_size= 10 #data_len #int(data_len/200)*100
+    window_size= 50 #data_len #int(data_len/200)*100
 
     #max iterations each timestep
     max_iters=1
-
+    noiseless_meas = atan2(truth[0,1],truth[0,0]) # for debugging purposes, line below should be meas[0]
     opt_class = satelliteSlidingWindow(meas[0], R, Q, P0, dt=dt, sw_size=window_size)
+    # opt_class_big = satelliteSlidingWindow(noiseless_meas, R, Q, P0, dt=dt, sw_size=window_size+1)
     # print (" a sample F")
     # print(opt_class.F_mat(opt_class.states[10]))
     opt_states = np.zeros((data_len,4)) #back sliding window
@@ -467,10 +462,14 @@ if __name__ == '__main__':
     opt_states[0] = x0 # In case not over-written later .. basically a special case when window_size=1
     rt_states[0] = x0
     for i in tqdm(range(1,data_len)):
+        noiseless_meas = atan2(truth[i,1],truth[i,0]) # for debugging purposes, line below should be meas[i]
+
         opt_class.add_one_timestep(meas[i])
+        # opt_class_big.add_one_timestep(noiseless_meas)
         # print('Optimized for index',i)
         
         opt_class.opt(max_iters)
+        # opt_class_big.opt(max_iters)
         if i> (window_size-1):
             opt_states[i-window_size+1] = opt_class.states[0]
         rt_states[i]=opt_class.states[-1]
