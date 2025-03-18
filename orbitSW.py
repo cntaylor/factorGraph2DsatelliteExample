@@ -94,8 +94,48 @@ class satelliteSlidingWindow:
     def __init__(self, meas: float, R: np.ndarray, 
                 Q : np.ndarray, P0 : np.ndarray, 
                 x0: np.ndarray = np.array([0, 2E7, 4500, 0]),
-                dt: float = 5, sw_size: int=10):
-        
+                dt: float = 5, sw_size: int=10, opt_params:dict=None):
+        # meas: An np.array of (angular) measurements over time
+        # R : The measurement noise covariance matrix (really a scalar as the measurement is a scalar)
+        # Q : The process noise covariance matrix
+        # P0 : The prior covariance matrix
+        # x0 : The prior mean vector
+        # dt : The timestep between measurements
+        # sw_size : The size of the sliding window
+        # opt_params : A dictionary of parameters for the optimizer. Can have the following fields:
+        # # 'max_iters' : the maximum number of iterations to run at any given timestep
+        # # 'min_delta_x' : when the delta x is this small, no need to run further iterations
+        # # The next fields are for checking if the step is sufficiently linear.  If not, decrease the step size
+        # # 'check_linearity' : True or False (default True)
+        # # 'min_cos_angle_linear' : the minimum value of cos(angle) at which to accept the Gauss-Newton step (starts a 1 and goes down)
+        # # 'max_ratio_linear' : the maximum (r or 1/r) value at which to accept the Gauss-Newton step 
+        # # And if the scale factor gets to small, do you want to switch to Levenburg Marquardt? If so, what value of lambda do you start at?
+        # # 'switch_lm' : True or False (default False)
+        # # 'lm_lambda' : The initial value of lambda
+        # # 'lm_switch_scale' : The threshold value of scale at which to switch to Levenburg Marquardt
+        # # The remainder are thresholds for detecting weakly observable systems.  When y barely changes, ignore the delta_x
+        # # 'check_poor_observability' : True or False (default True)
+        # # 'min_y_norm' : If the change in y is smaller than this value (scaled by sqrt(len(y))), ignore the delta_x
+        # # 'min_max_delta_y' : If the maximum change in y is smaller than this value, ignore the delta_x
+        # # 'min_y_ratio' : If the ratio between the change in y and the magnitude of y is smaller than this value, ignore delta_x
+
+
+        if opt_params is None:
+            opt_params = {}
+        # Set the optimizer parameters to the defaults given here unless overridden
+        self.max_iters = opt_params.get('max_iters', 2)
+        self.min_delta_x = opt_params.get('min_delta_x', 1.0)
+        self.check_linearity = opt_params.get('check_linearity', True)
+        self.min_cos_angle_linear = opt_params.get('min_cos_angle_linear', .99)
+        self.max_ratio_linear = opt_params.get('max_ratio_linear', 2.0)
+        self.switch_lm = opt_params.get('switch_lm', False)
+        self.lm_lambda = opt_params.get('lm_lambda', 1E-5)
+        self.lm_switch_scale = opt_params.get('lm_switch_scale', 5E-2)
+        self.check_poor_observability = opt_params.get('check_poor_observability', True)
+        self.min_y_norm = opt_params.get('min_y_norm', 5E-3)
+        self.min_max_delta_y = opt_params.get('min_max_delta_y', 1E-2)
+        self.min_y_ratio = opt_params.get('min_y_ratio', 1E-3)
+
         self.dt = dt
         if self.dt > 1:
             self.prop_dt = self.dt / ceil(self.dt)
@@ -103,6 +143,7 @@ class satelliteSlidingWindow:
         else:
             self.prop_dt = self.dt
             self.n_timesteps=1
+
         self.sw_size = sw_size
 
         self.T = np.array([1,0,self.prop_dt,0, 0,1.,0,self.prop_dt, 0,0,1,0, 0,0,0,1]).reshape((4,4))
@@ -165,6 +206,7 @@ class satelliteSlidingWindow:
         self.meas = np.append(self.meas,meas)
         if self.N() > self.sw_size:
             self.marginalize_state()
+        self.opt()
 
     def marginalize_state(self):
         '''
@@ -191,7 +233,7 @@ class satelliteSlidingWindow:
         rotated_y = Q.T.dot(sub_y)
         ## 4 & 5.  Eliminate row and column and move remainder into prior_G (D' in paper, Eq 17)
         self.prior_G = R[4:,4:]
-        self.prior_xbar = self.states[1] 
+        self.prior_xbar = self.states[1].copy()
         self.prior_meas = rotated_y[4:]
 
         # Shorten the arrays
@@ -337,7 +379,7 @@ class satelliteSlidingWindow:
         for i in range(self.N()):
             self.states[i] += delta_x[i*4:(i+1)*4]       
 
-    def opt(self, max_iters:int = 100):
+    def opt(self):
         '''
         Create the Jacobian matrix (L) and the residual vector (y) for
         the current state.  Find the best linear approximation to minimize y
@@ -360,36 +402,61 @@ class satelliteSlidingWindow:
             y= self.create_y()
             tic2=time.perf_counter()
             M = L.T.dot(L)
+            if self.switch_lm:
+                M_orig = M
             Lty = L.T.dot(y)
             delta_x = spla.spsolve(M,Lty)
             toc2=time.perf_counter()
-            scale = 1
-            scale_good=False
-            # A measure of how much
-            #improvement you actually expect from this step
-            pred_delta_y_norm=la.norm(L.dot(delta_x))
-            ratio2 = pred_delta_y_norm/la.norm(y)
-            # print('ratio2 is ',ratio2,'delta y norm is ',pred_delta_y_norm, 'delta x norm is ',la.norm(delta_x))
-            if ratio2<1E-4 or pred_delta_y_norm<1E-6:
-                finished=True
-                print('y ratio is too small to run iteration',num_iters,'ratio is:',ratio2)
+            # Predict how much 'y' should change.  Helps to detect poor observability (i.e. the delta x is barely changing y)
+            if self.check_poor_observability:
+                pred_delta_y = L.dot(delta_x)
+                pred_delta_y_norm = la.norm(pred_delta_y)
+                y_ratio = pred_delta_y_norm/la.norm(y)
+                # print('ratio2 is ',ratio2,'delta y norm is ',pred_delta_y_norm, 'max delta y is ',np.max(np.abs(pred_delta_y)))
+                if y_ratio<self.min_y_ratio or \
+                    (pred_delta_y_norm<(self.min_y_norm*sqrt(len(y)-len(delta_x))) and 
+                     np.max(np.abs(pred_delta_y))<self.min_max_delta_y):
+                    finished=True
+                    print('y ratio is too small to run iteration',num_iters,'ratio is:',y_ratio,'pred delta y norm is',pred_delta_y_norm,'max delta_y is',np.max(np.abs(pred_delta_y)))
+                    break
+                pred_dy = pred_delta_y # used for the linearization check.  Don't recompute pred_dy!
             else:
+                pred_dy = L.dot(delta_x)
+
+            scale = 1
+            if self.check_linearity:
+                # Damp the Gauss-Newton step if it doesn't do what the linearization predicts
+                # pred_dy determines the direction that the change in $y$ _should_ go
+                # Now, test the direction that $y$ _actually_ goes.  Only accept it when
+                # the angle between the two vectors is sufficiently small and the ratio is close enough to 1
+                scale_good = False
                 while not scale_good:
                     next_y = self.create_y(self.add_delta(delta_x*scale))
-                    pred_y = y-L.dot(delta_x*scale)
-                    y_mag = y.T.dot(y)
-                    ratio = (y_mag - next_y.dot(next_y))/(y_mag-pred_y.dot(pred_y))
-                    if ratio < 4. and ratio > .25:
+                    true_y_diff = y - next_y
+
+                    #Not finding the angle really, but the cos of the angle
+                    angle_ys = pred_dy.dot(true_y_diff) / (la.norm(true_y_diff)*la.norm(pred_dy))
+                    ratio = la.norm(true_y_diff)/la.norm(pred_dy*scale)
+                    # print('ratio is ',ratio,'cos(angle) is ',angle_ys)
+                    if angle_ys > self.min_cos_angle_linear and \
+                        ratio < self.max_ratio_linear and ratio > 1/self.max_ratio_linear:
                         scale_good = True
                     else:
                         scale /= 2.0
-                        if scale < .1:
-                            print('Your derivatives are probably wrong!  scale is',scale,'ratio is',ratio, 'ratio2 is',ratio2)
+                        if scale <= .1:
+                            print('Warning:  scale is less than .1')
+                        if self.switch_lm:
+                            if scale <= self.lm_switch_scale:
+                                # Implement Levenburg-Marquardt, scaling the I matrix to get bigger the smaller scale is
+                                M = M_orig + np.eye(M.shape[0])*self.lm_lambda * self.lm_switch_scale/scale
+                                delta_x = spla.spsolve(M,Lty)
+                                pred_dy = L.dot(delta_x)
+
                     assert(scale > 1E-6)
-                num_iters+=1
-                self.update_state(delta_x*scale)
-                # print('iteration',num_iters,'delta_x length was',la.norm(delta_x*scale), 'scale was',scale)
-                finished = la.norm(delta_x)<1 or num_iters >= max_iters
+            num_iters+=1
+            self.update_state(delta_x*scale)
+            # print('iteration',num_iters,'delta_x length was',la.norm(delta_x*scale), 'len delta_y was',la.norm(true_y_diff), 'scale was',scale)
+            finished = la.norm(delta_x)<=self.min_delta_x or num_iters >= self.max_iters
         toc1=time.perf_counter()
         self.opt_call_sizes.append(self.N())
         self.opt_call_times.append(toc1-tic1)
@@ -448,28 +515,36 @@ if __name__ == '__main__':
     
     data_len = len(meas)
     
-    window_size= 50 #data_len #int(data_len/200)*100
+    window_size= 200 #data_len #int(data_len/200)*100
 
-    #max iterations each timestep
-    max_iters=1
-    noiseless_meas = atan2(truth[0,1],truth[0,0]) # for debugging purposes, line below should be meas[0]
-    opt_class = satelliteSlidingWindow(meas[0], R, Q, P0, dt=dt, sw_size=window_size)
-    # opt_class_big = satelliteSlidingWindow(noiseless_meas, R, Q, P0, dt=dt, sw_size=window_size+1)
-    # print (" a sample F")
-    # print(opt_class.F_mat(opt_class.states[10]))
+    # noiseless_meas = atan2(truth[0,1],truth[0,0]) # for debugging purposes, line below should be meas[0]
+    
+    # These are a few different parameterization sets that do interesting things
+    # This one should be the equivalent of the Extended Kalman filter (if you set window_size=1)
+    # opt_params = {'max_iters':1, 'switch_lm': False, 'check_linearity': False, 'check_poor_observability': False}
+    # # Same as the default, but with Levenburg Marquardt enabled
+    # opt_params = {'switch_lm': True}
+    # Default, but with only one iteration per time step
+    # opt_params = {'max_iters': 1}
+    opt_params={} # All defaults
+
+    opt_class = satelliteSlidingWindow(meas[0], R, Q, P0, dt=dt, sw_size=window_size, opt_params=opt_params)
+
+    # Declare variables to store the results
     opt_states = np.zeros((data_len,4)) #back sliding window
     rt_states = np.zeros((data_len,4)) # real time type states
     opt_states[0] = x0 # In case not over-written later .. basically a special case when window_size=1
     rt_states[0] = x0
+
+    # Run the optimizer
     for i in tqdm(range(1,data_len)):
-        noiseless_meas = atan2(truth[i,1],truth[i,0]) # for debugging purposes, line below should be meas[i]
+        # noiseless_meas = atan2(truth[i,1],truth[i,0]) # for debugging purposes, line below should be meas[i]
 
         opt_class.add_one_timestep(meas[i])
         # opt_class_big.add_one_timestep(noiseless_meas)
         # print('Optimized for index',i)
         
-        opt_class.opt(max_iters)
-        # opt_class_big.opt(max_iters)
+        # opt_class.opt()
         if i> (window_size-1):
             opt_states[i-window_size+1] = opt_class.states[0]
         rt_states[i]=opt_class.states[-1]
@@ -493,6 +568,9 @@ if __name__ == '__main__':
     axs[1].set_title('velocity error')
     axs[1].plot(errors[:,2],label='x')
     axs[1].plot(errors[:,3],label='y')
+    axs[0].grid(True)
+    axs[1].grid(True)
+
     
     plt.figure()
     ekf_res = np.load(f'ekf_{prefix}_res.npz')['ekf_res']
@@ -526,4 +604,4 @@ if __name__ == '__main__':
 
     np.savez(f'timing_res_{window_size}.npz', call_sizes=opt_class.opt_call_sizes, full_opt = opt_class.opt_call_times,
              solve_L_times = opt_class.solve_L_times, create_and_solve_L = opt_class.solve_and_form_L_times)
-    plt.show()
+    plt.show() # Can comment this out to not show the plots
