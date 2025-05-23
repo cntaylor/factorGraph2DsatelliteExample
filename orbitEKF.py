@@ -101,20 +101,20 @@ G_E = 3.986E14
 
 def f(x,dt):
     accel = -G_E*x[:2]/la.norm(x[:2])**3
-    F = np.eye(4)
-    F[:2,2:] = np.eye(2) * dt
+    T= np.eye(4)
+    T[:2,2:] = np.eye(2) * dt
     accel_add = np.concatenate((dt**2/2 * accel, accel*dt))
-    return F.dot(x) + accel_add
+    return T.dot(x) + accel_add
 
 def f2(x,dt):
     dt_divider=50
     my_dt = dt/dt_divider
-    F = np.eye(4)
-    F[:2,2:] = np.eye(2) * my_dt
+    T = np.eye(4)
+    T[:2,2:] = np.eye(2) * my_dt
     for _ in range(dt_divider):
         accel = -G_E *x[:2]/la.norm(x[:2])**3
         move_accel = np.concatenate((accel * 0.5*my_dt**2, my_dt*accel))
-        x = F.dot(x)+move_accel
+        x = T.dot(x)+move_accel
     return x
 
 def h(x):
