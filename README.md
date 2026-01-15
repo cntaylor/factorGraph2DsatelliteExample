@@ -34,3 +34,6 @@ Finally, if you want to setup your Python environment easily so everything "just
 conda env create -f requirements.yml
 conda activate factorGraphExample
 ```
+
+# Possibly useful links
+If you want to draw factor graphs in your own papers, [this github repository](https://github.com/cntaylor/factor-graph-drawing)  may be useful.
